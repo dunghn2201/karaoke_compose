@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">KaraokeCompose</string>
+    <string name="url_ve_dau_mai_toc_nguoi_thuong_instrument">https://storage.googleapis.com/ikara-storage/tmp/beat.mp3</string>
+</resources>
