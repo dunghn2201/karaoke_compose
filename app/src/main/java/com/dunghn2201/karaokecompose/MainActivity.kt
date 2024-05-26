@@ -8,7 +8,12 @@ import android.view.Window
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
@@ -30,10 +36,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -47,6 +56,8 @@ import com.google.accompanist.systemuicontroller.rememberSystemUiController
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.round
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,8 +66,7 @@ class MainActivity : ComponentActivity() {
             HideStatusBar(window)
             KaraokeComposeTheme {
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                    modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background
                 ) {
                     KaraokeComponent()
                 }
@@ -68,20 +78,31 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun KaraokeComponent() {
     val context = LocalContext.current
-    val mediaPlayer by lazy { MediaPlayer() }
+    val mediaPlayer = remember { MediaPlayer() }
     var totalDuration by remember { mutableStateOf(0) }
+    var forceRefresh by remember { mutableStateOf(false) }
     var currentTimeProgress by remember { mutableStateOf(0f) }
     var lyric by remember { mutableStateOf(Lyric(emptyList())) }
     var textActiveIndex by remember { mutableStateOf(0) }
-
+    var resumeSaved by remember {
+        mutableStateOf(0)
+    }
+    val playIconResource = if (mediaPlayer.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
     val listState = rememberLazyListState()
     LaunchedEffect(Unit) {
-        mediaPlayer.playMusic(context)
-        totalDuration = mediaPlayer.duration
-        lyric = context.readAssetsFile("lyrics.json")
-        while (true) {
-            currentTimeProgress = mediaPlayer.currentPosition.toFloat()
-            delay(300)
+        if (resumeSaved == 0) {
+            mediaPlayer.playMusic(context)
+            lyric = context.readAssetsFile("lyrics.json")
+        }
+    }
+
+    LaunchedEffect(key1 = mediaPlayer.isPlaying, key2 = forceRefresh) {
+        if (mediaPlayer.isPlaying) {
+            totalDuration = mediaPlayer.duration
+            while (true) {
+                currentTimeProgress = mediaPlayer.currentPosition.toFloat()
+                delay(300)
+            }
         }
     }
     LaunchedEffect(textActiveIndex) {
@@ -95,35 +116,32 @@ fun KaraokeComponent() {
             .background(color = Blue),
         verticalArrangement = Arrangement.Center
     ) {
+
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(300.dp),
-            state = listState
+                .height(300.dp), state = listState
         ) {
             items(lyric.data.size) { index ->
                 val item = lyric.data[index]
                 val textDisplay = item.lineLyric.joinToString(" ") { it.text }
+                val timesCharacterF = item.lineLyric.map { round(it.time.toFloat()) }
+                val timesCharacterL = item.lineLyric.map {
+                    it.time.convertToMilliseconds()
+                }
+                val currentTime = round(currentTimeProgress / 1000)
                 val textActive = item.lineLyric.filter {
-                    it.time.toFloat() in 0F..(currentTimeProgress / 1000)
+                    it.time.toFloat() in 0F..(currentTime)
                 }
                 if (textActive.isNotEmpty()) {
                     textActiveIndex = index
                 }
-                val targetWord = textActive.joinToString(" ") { it.text }
-                val startIndex = 0
-                val endIndex =
-                    (textDisplay.indexOf(targetWord) + targetWord.length).takeUnless { it == -1 }
-                        ?: 0
-                MultiStyleText(
+                val shouldStart = currentTime in timesCharacterF.first()..timesCharacterF.last()
+                val duration = timesCharacterL.last() - timesCharacterL.first()
+                SmoothKaraokeText(
                     text = textDisplay,
-                    StyleRange(
-                        startIndex,
-                        endIndex,
-                        Color.Red,
-                        30f,
-                        FontWeight.Bold
-                    ),
+                    animationDuration = duration,
+                    shouldStart = shouldStart && mediaPlayer.isPlaying
                 )
             }
         }
@@ -136,18 +154,42 @@ fun KaraokeComponent() {
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(text = currentTimeProgress.toLong().toMinutesSecondsText(), color = Color.White)
+            Image(painterResource(id = playIconResource),
+                contentDescription = "",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(30.dp)
+                    .clickableWithoutRipple {
+                        val updatedState = !mediaPlayer.isPlaying
+                        if (updatedState) {
+                            mediaPlayer.resumeMusic(resumeSaved)
+                            forceRefresh = true
+                        } else {
+                            mediaPlayer.pauseMusic { resumeSaved = it }
+                            forceRefresh = false
+                        }
+
+                    })
             Text(text = totalDuration.toLong().toMinutesSecondsText(), color = Color.White)
         }
+
         Slider(
             modifier = Modifier.padding(horizontal = 20.dp),
             value = currentTimeProgress,
             onValueChange = {
-                // Do nothing
+
             },
             valueRange = 0f..totalDuration.toFloat()
         )
     }
 
+}
+
+fun String.convertToMilliseconds(): Long {
+    val parts = this.split(".")
+    val minutes = parts[0].toLong()
+    val milliseconds = parts[1].padEnd(3, '0').take(3).toLong()
+    return ((minutes * 1000) + milliseconds)
 }
 
 fun Long.toMinutesSecondsText(): String {
@@ -164,42 +206,30 @@ fun MediaPlayer.playMusic(context: Context) {
         start()
     } catch (e: Exception) {
         release()
-        println(e)
+        println("playMusic ex $e")
     }
 }
 
-@Composable
-fun MultiStyleText(text: String, vararg styleRanges: StyleRange) {
-    val annotatedString = buildAnnotatedString {
-        var currentPosition = 0
+fun MediaPlayer.pauseMusic(onSaveResumePoint: (Int) -> Unit) {
+    try {
+        println("///check 2 ${isPlaying}")
+        pause()
+        onSaveResumePoint.invoke(currentPosition)
+    } catch (e: Exception) {
+        release()
+        println("pauseMusic ex $e")
 
-        styleRanges.forEach { range ->
-            val style = SpanStyle(
-                color = range.textColor,
-                fontSize = range.textSizeSp.sp,
-                fontWeight = range.fontWeight
-            )
-            withStyle(style) {
-                append(text.substring(currentPosition, range.endIndex))
-            }
-            currentPosition = range.endIndex
-        }
-
-        // Append the remaining text with the default style
-        withStyle(SpanStyle()) {
-            append(text.substring(currentPosition))
-        }
     }
+}
 
-    Text(
-        modifier = Modifier.fillMaxWidth(),
-        text = annotatedString, style = TextStyle(
-            fontSize = 30.sp,
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-    )
+fun MediaPlayer.resumeMusic(resumePoint: Int) {
+    try {
+        seekTo(resumePoint)
+        start()
+    } catch (e: Exception) {
+        release()
+        println("resumeMusic ex $e")
+    }
 }
 
 fun Context.readAssetsFile(fileName: String): Lyric {
@@ -207,34 +237,21 @@ fun Context.readAssetsFile(fileName: String): Lyric {
     return Gson().fromJson(assets, Lyric::class.java)
 }
 
-
 private fun AssetManager.readAssetsFile(fileName: String): String =
     open(fileName).bufferedReader().use { it.readText() }
 
 data class Lyric(
-    @SerializedName("data")
-    val data: List<Data>,
+    @SerializedName("data") val data: List<Data>,
 ) {
     data class Data(
-        @SerializedName("line_lyric")
-        val lineLyric: List<LineLyric>,
+        @SerializedName("line_lyric") val lineLyric: List<LineLyric>,
     ) {
         data class LineLyric(
-            @SerializedName("time")
-            val time: String,
-            @SerializedName("text")
-            val text: String,
+            @SerializedName("time") val time: String,
+            @SerializedName("text") val text: String,
         )
     }
 }
-
-data class StyleRange(
-    val startIndex: Int,
-    val endIndex: Int,
-    val textColor: Color,
-    val textSizeSp: Float,
-    val fontWeight: FontWeight
-)k
 
 @Preview(showBackground = true)
 @Composable
@@ -253,5 +270,66 @@ fun HideStatusBar(window: Window) {
             addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
         }
         systemUiController.setStatusBarColor(Color.Transparent, darkIcons = true)
+    }
+}
+
+@Composable
+fun SmoothKaraokeText(
+    text: String,
+    baseColor: Color = Color.White,
+    highlightColor: Color = Color.Red,
+    animationDuration: Long = 5000L,
+    shouldStart: Boolean = false
+) {
+    val animatedColors = remember(text) {
+        text.map { Animatable(baseColor) }
+    }
+
+    LaunchedEffect(key1 = text, key2 = shouldStart) {
+        if (shouldStart) animatedColors.forEachIndexed { index, animatable ->
+            launch {
+                val singleCharDuration = animationDuration / text.length
+                delay(index * singleCharDuration)
+                animatable.animateTo(
+                    targetValue = highlightColor,
+                    animationSpec = tween(durationMillis = singleCharDuration.toInt())
+                )
+            }
+        }
+    }
+
+    val animatedString = buildAnnotatedString {
+        text.forEachIndexed { index, char ->
+            withStyle(style = SpanStyle(color = animatedColors[index].value)) {
+                append(char)
+            }
+        }
+    }
+
+    Text(
+        text = animatedString,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp),
+        fontWeight = FontWeight.Bold,
+        fontSize = 25.sp,
+        textAlign = TextAlign.Center
+    )
+}
+
+inline fun Modifier.clickableWithoutRipple(
+    enabled: Boolean = true,
+    onClickLabel: String? = null,
+    role: Role? = null,
+    crossinline onClick: () -> Unit,
+): Modifier = composed {
+    clickable(
+        enabled = enabled,
+        indication = null,
+        onClickLabel = onClickLabel,
+        role = role,
+        interactionSource = remember { MutableInteractionSource() },
+    ) {
+        onClick()
     }
 }
