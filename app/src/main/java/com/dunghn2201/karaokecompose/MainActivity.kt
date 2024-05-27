@@ -9,12 +9,21 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.Animatable
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector4D
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,8 +31,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -32,17 +45,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -57,6 +75,8 @@ import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.math.BigDecimal
+import java.math.RoundingMode
 import kotlin.math.round
 
 class MainActivity : ComponentActivity() {
@@ -79,13 +99,13 @@ class MainActivity : ComponentActivity() {
 fun KaraokeComponent() {
     val context = LocalContext.current
     val mediaPlayer = remember { MediaPlayer() }
-    var totalDuration by remember { mutableStateOf(0) }
+    var totalDuration by remember { mutableIntStateOf(0) }
     var forceRefresh by remember { mutableStateOf(false) }
-    var currentTimeProgress by remember { mutableStateOf(0f) }
+    var currentTimeProgress by remember { mutableFloatStateOf(0f) }
     var lyric by remember { mutableStateOf(Lyric(emptyList())) }
-    var textActiveIndex by remember { mutableStateOf(0) }
+    var textActiveIndex by remember { mutableIntStateOf(0) }
     var resumeSaved by remember {
-        mutableStateOf(0)
+        mutableIntStateOf(0)
     }
     val playIconResource = if (mediaPlayer.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
     val listState = rememberLazyListState()
@@ -101,7 +121,7 @@ fun KaraokeComponent() {
             totalDuration = mediaPlayer.duration
             while (true) {
                 currentTimeProgress = mediaPlayer.currentPosition.toFloat()
-                delay(300)
+                delay(10)
             }
         }
     }
@@ -125,23 +145,24 @@ fun KaraokeComponent() {
             items(lyric.data.size) { index ->
                 val item = lyric.data[index]
                 val textDisplay = item.lineLyric.joinToString(" ") { it.text }
-                val timesCharacterF = item.lineLyric.map { round(it.time.toFloat()) }
+                val timesCharacterF =
+                    item.lineLyric.map { it.time.toDouble().roundBigDecimalToFloatWithPrecision() }
                 val timesCharacterL = item.lineLyric.map {
                     it.time.convertToMilliseconds()
                 }
-                val currentTime = round(currentTimeProgress / 1000)
+                val currentTime =
+                    (currentTimeProgress / 1000).toDouble().roundBigDecimalToFloatWithPrecision()
                 val textActive = item.lineLyric.filter {
                     it.time.toFloat() in 0F..(currentTime)
                 }
                 if (textActive.isNotEmpty()) {
                     textActiveIndex = index
                 }
-                val shouldStart = currentTime in timesCharacterF.first()..timesCharacterF.last()
-                val duration = timesCharacterL.last() - timesCharacterL.first()
+                val shouldStart =
+                    currentTime in timesCharacterF.first()..timesCharacterF.last()
                 SmoothKaraokeText(
-                    text = textDisplay,
-                    animationDuration = duration,
-                    shouldStart = shouldStart && mediaPlayer.isPlaying
+                    lineLyrics = item.lineLyric,
+                    isPlaying = shouldStart && mediaPlayer.isPlaying
                 )
             }
         }
@@ -182,7 +203,6 @@ fun KaraokeComponent() {
             valueRange = 0f..totalDuration.toFloat()
         )
     }
-
 }
 
 fun String.convertToMilliseconds(): Long {
@@ -309,13 +329,84 @@ fun SmoothKaraokeText(
     Text(
         text = animatedString,
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(8.dp),
+            .wrapContentSize()
+            .padding(3.dp),
         fontWeight = FontWeight.Bold,
         fontSize = 25.sp,
         textAlign = TextAlign.Center
     )
 }
+
+@Composable
+fun SmoothKaraokeText(
+    lineLyrics: List<Lyric.Data.LineLyric>,
+    baseColor: Color = Color.White,
+    highlightColor: Color = Color.Red,
+    isPlaying: Boolean = false
+) {
+    val data = lineLyrics.mapIndexed { index, lyric ->
+        val nextLyric = lineLyrics.getOrNull(index + 1)
+        val totalTime = (nextLyric?.time?.convertToMilliseconds()
+            ?: (lineLyrics.last().time.convertToMilliseconds() + 300L)) - lyric.time.convertToMilliseconds()
+        "${lyric.text} " to totalTime
+    }.map {
+        val singleCharDuration = it.second / it.first.length
+        it.first.map { text -> text to if (text == ' ') 0 else singleCharDuration }
+    }.flatten()
+
+
+    val text = data.map { it.first }.joinToString("").trim()
+
+    val totalDuration =
+        lineLyrics.last().time.convertToMilliseconds() - lineLyrics.first().time.convertToMilliseconds()
+    val animatedColors = remember(text) {
+        text.map { Animatable(baseColor) }
+    }
+    LaunchedEffect(Unit) {
+        val log = data.map { it.second }.count().toLong()
+        val log2 = data.map { it.first }.joinToString("").trim().length
+        println("/// log $log")
+        println("/// log2 $log2")
+        println("/// totalDuration $totalDuration == text $text; ${text.length}")
+    }
+    LaunchedEffect(key1 = text, key2 = isPlaying) {
+        if (isPlaying) animatedColors.forEachIndexed { index, animatable ->
+            val targetData = data[index]
+            launch {
+                //  val singleCharDuration = totalDuration / text.length
+                val singleCharDuration = targetData.second
+                delay(index * singleCharDuration)
+                animatable.animateTo(
+                    targetValue = highlightColor,
+                    animationSpec = tween(durationMillis = singleCharDuration.toInt())
+                )
+            }
+        }
+    }
+
+    val animatedString = buildAnnotatedString {
+        text.forEachIndexed { index, char ->
+            withStyle(
+                style = SpanStyle(
+                    color = animatedColors[index].value
+                )
+            ) {
+                append(char)
+            }
+        }
+    }
+
+    Text(
+        text = animatedString,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(3.dp),
+        fontWeight = FontWeight.Bold,
+        fontSize = 20.sp,
+        textAlign = TextAlign.Center
+    )
+}
+
 
 inline fun Modifier.clickableWithoutRipple(
     enabled: Boolean = true,
@@ -332,4 +423,8 @@ inline fun Modifier.clickableWithoutRipple(
     ) {
         onClick()
     }
+}
+
+fun Double.roundBigDecimalToFloatWithPrecision(): Float {
+    return BigDecimal(this).setScale(3, RoundingMode.HALF_EVEN).toFloat()
 }
