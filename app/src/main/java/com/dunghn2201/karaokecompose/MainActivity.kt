@@ -4,18 +4,12 @@ import android.content.Context
 import android.content.res.AssetManager
 import android.media.MediaPlayer
 import android.os.Bundle
-import android.view.Window
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.Animatable
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.AnimationVector4D
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,7 +26,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -40,12 +33,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -54,16 +45,21 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.dunghn2201.karaokecompose.model.Lyric
+import com.dunghn2201.karaokecompose.model.SmoothTextItem
 import com.dunghn2201.karaokecompose.ui.theme.Blue
 import com.dunghn2201.karaokecompose.ui.theme.KaraokeComposeTheme
-import com.google.accompanist.systemuicontroller.rememberSystemUiController
-import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
+import com.dunghn2201.karaokecompose.ui.utils.HideStatusBar
+import com.dunghn2201.karaokecompose.ui.utils.clickableWithoutRipple
+import com.dunghn2201.karaokecompose.ui.utils.convertToMilliseconds
+import com.dunghn2201.karaokecompose.ui.utils.pauseMusic
+import com.dunghn2201.karaokecompose.ui.utils.playMusic
+import com.dunghn2201.karaokecompose.ui.utils.readAssetsFile
+import com.dunghn2201.karaokecompose.ui.utils.resumeMusic
+import com.dunghn2201.karaokecompose.ui.utils.roundBigDecimalToFloatWithPrecision
+import com.dunghn2201.karaokecompose.ui.utils.toMinutesSecondsText
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.math.BigDecimal
-import java.math.RoundingMode
-import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -187,90 +183,11 @@ fun KaraokeComponent() {
     }
 }
 
-fun String.convertToMilliseconds(): Long {
-    val parts = this.split(".")
-    val second = parts[0].toLong()
-    val milliseconds = parts[1].padEnd(3, '0').take(3).toLong()
-    return ((second * 1000) + milliseconds)
-}
-
-fun Long.toMinutesSecondsText(): String {
-    val second = this / 1000
-    val minutes = second / 60
-    val remainingSecond = second % 60
-    return String.format(Locale.ROOT, "%02d:%02d", minutes, remainingSecond)
-}
-
-fun MediaPlayer.playMusic(context: Context) {
-    try {
-        setDataSource(context.getString(R.string.url_ve_dau_mai_toc_nguoi_thuong_instrument))
-        prepare()
-        start()
-    } catch (e: Exception) {
-        release()
-        println(e)
-    }
-}
-
-fun MediaPlayer.pauseMusic(onSaveResumePoint: (Int) -> Unit) {
-    try {
-        pause()
-        onSaveResumePoint.invoke(currentPosition)
-    } catch (e: Exception) {
-        release()
-        println(e)
-
-    }
-}
-
-fun MediaPlayer.resumeMusic(resumePoint: Int) {
-    try {
-        seekTo(resumePoint)
-        start()
-    } catch (e: Exception) {
-        release()
-        println(e)
-    }
-}
-
-fun Context.readAssetsFile(fileName: String): Lyric {
-    val assets = assets.readAssetsFile(fileName)
-    return Gson().fromJson(assets, Lyric::class.java)
-}
-
-private fun AssetManager.readAssetsFile(fileName: String): String =
-    open(fileName).bufferedReader().use { it.readText() }
-
-data class Lyric(
-    @SerializedName("data") val data: List<Data>,
-) {
-    data class Data(
-        @SerializedName("line_lyric") val lineLyric: List<LineLyric>,
-    ) {
-        data class LineLyric(
-            @SerializedName("time") val time: String,
-            @SerializedName("text") val text: String,
-        )
-    }
-}
-
 @Preview(showBackground = true)
 @Composable
 fun GreetingPreview() {
     KaraokeComposeTheme {
         KaraokeComponent()
-    }
-}
-
-@Composable
-fun HideStatusBar(window: Window) {
-    val systemUiController = rememberSystemUiController()
-    SideEffect {
-        with(window) {
-            addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
-            addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-        }
-        systemUiController.setStatusBarColor(Color.Transparent, darkIcons = true)
     }
 }
 
@@ -297,7 +214,6 @@ fun SmoothKaraokeText(
                 SmoothTextItem.SingleChar(
                     parentText = text,
                     char = char,
-                  //  duration = if (char == ' ') 0 else singleCharDuration,
                     duration = singleCharDuration,
                     animatable = Animatable(baseColor)
                 )
@@ -330,7 +246,6 @@ fun SmoothKaraokeText(
                         .map { it.duration }
                         .takeIf { it.isNotEmpty() }?.reduce { acc, l -> acc + l } ?: 0L
                 val animatable = triple.animatable
-                println("/// triple.parentText ${triple.parentText} == ${tempLyricTime} == ${triple.duration}")
                 launch {
                     val singleCharDuration = triple.duration
                     delay(tempLyricTime + singleCharDuration)
@@ -364,40 +279,4 @@ fun SmoothKaraokeText(
         fontSize = 20.sp,
         textAlign = TextAlign.Center
     )
-}
-
-data class SmoothTextItem(
-    val text: String,
-    val start: Float,
-    val end: Float,
-    val singleChars: List<SingleChar>,
-) {
-
-    data class SingleChar(
-        val parentText: String,
-        val char: Char,
-        val duration: Long,
-        val animatable: Animatable<Color, AnimationVector4D>,
-    )
-}
-
-inline fun Modifier.clickableWithoutRipple(
-    enabled: Boolean = true,
-    onClickLabel: String? = null,
-    role: Role? = null,
-    crossinline onClick: () -> Unit,
-): Modifier = composed {
-    clickable(
-        enabled = enabled,
-        indication = null,
-        onClickLabel = onClickLabel,
-        role = role,
-        interactionSource = remember { MutableInteractionSource() },
-    ) {
-        onClick()
-    }
-}
-
-fun Double.roundBigDecimalToFloatWithPrecision(): Float {
-    return BigDecimal(this).setScale(3, RoundingMode.HALF_EVEN).toFloat()
 }
