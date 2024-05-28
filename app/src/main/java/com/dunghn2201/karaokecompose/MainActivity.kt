@@ -371,10 +371,8 @@ fun SmoothKaraokeText(
     }
     LaunchedEffect(key1 = text, key2 = isPlaying) {
         if (isPlaying) animatedColors.forEachIndexed { index, animatable ->
-            val targetData = data[index]
             launch {
-                //  val singleCharDuration = totalDuration / text.length
-                val singleCharDuration = targetData.second
+                val singleCharDuration = totalDuration / text.length
                 delay(index * singleCharDuration)
                 animatable.animateTo(
                     targetValue = highlightColor,
